@@ -52,14 +52,14 @@ systemd-сервиса.
 
 - Linux с пользовательским systemd и доступной пользовательской сессией.
 - Python **3.11+**, в том числе `/usr/bin/python3`, используемый сервисом.
-- Git для клонирования и обновления.
+- Git для клонирования и обновления; Bash и curl для установки одной командой.
 - Grok Build и Singapore Xiaomi Token Plan API key для работы с моделью.
 
 На Ubuntu зависимости можно установить через `apt`:
 
 ```bash
 sudo apt update
-sudo apt install python3 git
+sudo apt install python3 git curl
 ```
 
 Проверьте, что версия Python в вашей версии Ubuntu удовлетворяет требованию 3.11+.
@@ -67,14 +67,52 @@ Python-пакеты из PyPI для этого проекта не требую
 
 ## Установка
 
+### Одной командой через curl
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zinin/mimo-grok-adapter/master/install.sh | bash
+```
+
+Команда загружает и выполняет `install.sh` из ветки **master**. Скрипт клонирует
+репозиторий в `${XDG_DATA_HOME:-$HOME/.local/share}/mimo-grok-adapter` и запускает
+`install.py`. Повторный запуск обновляет чистый checkout через `git pull --ff-only`
+и переустанавливает сервис. Checkout сохраняется для последующих обновлений.
+
+Для использования существующего локального зеркала или другого каталога:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zinin/mimo-grok-adapter/master/install.sh \
+  | MIMO_GROK_REPO_DIR=/opt/github/zinin/mimo-grok-adapter bash
+```
+
+`MIMO_GROK_REPO_DIR` задаёт абсолютный путь. Существующий checkout должен находиться
+на ветке `master`, иметь origin этого репозитория и сохранённые локальные изменения.
+При обнаружении постороннего каталога, другой ветки или несохранённых изменений
+скрипт останавливается и сохраняет пользовательские файлы.
+
+Для установки только файлов:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zinin/mimo-grok-adapter/master/install.sh \
+  | bash -s -- --no-start
+```
+
+Используется Bash. Выполняйте команду от обычного пользователя. Для
+предварительного просмотра кода используйте ручное клонирование ниже.
+
+### Через Git
+
 Клонируйте репозиторий в выбранный каталог. Для локального зеркала в
 `/opt/github/zinin`:
 
 ```bash
-git clone https://github.com/zinin/mimo-grok-adapter.git /opt/github/zinin/mimo-grok-adapter
+git clone --branch master https://github.com/zinin/mimo-grok-adapter.git /opt/github/zinin/mimo-grok-adapter
 cd /opt/github/zinin/mimo-grok-adapter
 ./install.py
 ```
+
+Из локального checkout также можно запускать `./install.sh`; он передаёт параметры
+существующему Python-установщику.
 
 Запускайте установщик от своего обычного пользователя. Он устанавливает:
 
@@ -184,6 +222,9 @@ check-mimo-grok --adapted --model flash --timeout 90 --json
 Результаты последующих запусков показывают текущее состояние сервера и клиента.
 
 ## Обновление локальной установки
+
+Для установки через curl повторите выбранную команду из раздела установки.
+Для checkout в `/opt/github/zinin/mimo-grok-adapter`:
 
 ```bash
 cd /opt/github/zinin/mimo-grok-adapter
