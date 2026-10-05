@@ -1,14 +1,26 @@
 # MiMo Grok Adapter
 
 A local adapter for **MiMo-V2.6-Flash** and **MiMo-V2.6-Pro** in **Grok Build**.
-It works around a confirmed nullable-type incompatibility in Xiaomi MiMo Token
-Plan tool schemas that can produce truncated JSON arguments or raw XML tool calls
-when using `grep` and `read_file`.
+It works around a confirmed nullable-type incompatibility in both Xiaomi MiMo
+Token Plan and the ordinary pay-as-you-go API. The incompatibility can produce
+truncated JSON arguments or raw XML tool calls when using `grep` and `read_file`.
 
 ```text
-Grok Build → http://127.0.0.1:8320/v1/responses → Xiaomi Token Plan Singapore
-                      tool-schema normalization
+                         tool-schema normalization
+Grok Build → 127.0.0.1:8320/v1/responses     → Singapore Token Plan
+           → 127.0.0.1:8320/api/v1/responses → pay-as-you-go API
 ```
+
+One user service handles both routes. Existing Token Plan configurations retain
+their original local URL.
+
+| Access method | Local Grok `base_url` | Fixed upstream | Client credential |
+| --- | --- | --- | --- |
+| Singapore Token Plan | `http://127.0.0.1:8320/v1` | `https://token-plan-sgp.xiaomimimo.com/v1` | Singapore Token Plan key |
+| Pay-as-you-go API | `http://127.0.0.1:8320/api/v1` | `https://api.xiaomimimo.com/v1` | Ordinary API key |
+
+Keep each key with its matching route. Ordinary API requests consume API credits;
+Token Plan requests consume subscription quota.
 
 The project uses the Python standard library and supports the OpenAI Responses
 API. It includes the adapter, a compatibility checker, and a systemd user-service
@@ -40,9 +52,10 @@ are forwarded as they arrive.
 - Explicit `null` loses its schema allowance after normalization.
 - Unions with multiple non-null types, such as `["string", "integer", "null"]`,
   remain unchanged. `anyOf`/`oneOf` constructs are preserved.
-- The adapter supports POST `/v1/responses` and the two models listed above.
-- The upstream is fixed to `https://token-plan-sgp.xiaomimimo.com/v1`.
-  This endpoint requires a **Singapore Token Plan** key.
+- The adapter supports POST `/v1/responses` and `/api/v1/responses` for the two
+  models listed above. Both routes apply the same schema normalization.
+- The request path selects one of the two fixed upstreams in the table above.
+  Client-supplied upstream URLs and unknown paths are rejected.
 - The workaround addresses a specific schema incompatibility. Compatibility
   with every possible tool and future Grok version requires separate testing.
 - Limits: a 32 MiB request body, up to 16 concurrent handlers, and a 180-second
@@ -53,7 +66,8 @@ are forwarded as they arrive.
 - Linux with a systemd user manager and an available user session.
 - Python **3.11+**, including `/usr/bin/python3`, which the service uses.
 - Git for cloning and updates; Bash and curl for one-command installation.
-- Grok Build and a Singapore Xiaomi Token Plan API key to use the models.
+- Grok Build and a key for your chosen route: Singapore Token Plan, ordinary
+  Xiaomi API, or both.
 
 On Ubuntu, install the dependencies with `apt`:
 
@@ -164,41 +178,65 @@ Add the missing sections from
 exists: declaring the same TOML table twice is invalid. Preserve your
 `[models]` defaults and existing direct-model entries.
 
-The example uses `env_key = "MIMO_API_KEY"`. Supply the key through the
-environment before starting Grok, for example with an interactive prompt:
+The example uses separate variables for the two credentials:
+
+- `MIMO_API_KEY`: Singapore Token Plan key, preserving the existing example.
+- `MIMO_PAYG_API_KEY`: ordinary pay-as-you-go API key.
+
+Supply the variables for the routes you use before starting Grok, for example
+with interactive prompts:
 
 ```bash
-read -rsp 'Singapore Xiaomi Token Plan API key: ' MIMO_API_KEY
+read -rsp 'Singapore Xiaomi Token Plan key: ' MIMO_API_KEY
 printf '\n'
 export MIMO_API_KEY
+
+read -rsp 'Xiaomi pay-as-you-go API key: ' MIMO_PAYG_API_KEY
+printf '\n'
+export MIMO_PAYG_API_KEY
 ```
 
-If your key is already configured in Grok, retain your existing authentication
-method. The adapter receives `Authorization` from the client and forwards it to
-Xiaomi. Authentication stays in the client configuration.
+If your keys are already configured in Grok, retain that authentication method.
+The adapter receives `Authorization` from each client request and forwards it to
+the upstream selected by that request path. Keys stay in the client
+configuration; the service itself stores none.
 
-Start the models through the adapter:
+Start Token Plan models through the adapter:
 
 ```bash
 grok -m mimo-v2.6-flash-adapted --effort high
 grok -m mimo-v2.6-pro-adapted --effort high
 ```
 
-Requests send the original model IDs, `mimo-v2.6-flash` and `mimo-v2.6-pro`.
-The `-adapted` suffix identifies the alternative local entries in Grok.
+Start ordinary API models through the adapter:
+
+```bash
+grok -m mimo-v2.6-flash-api-adapted --effort high
+grok -m mimo-v2.6-pro-api-adapted --effort high
+```
+
+The example also includes direct entries: `mimo-v2.6-flash` / `mimo-v2.6-pro`
+for Token Plan and `mimo-v2.6-flash-api` / `mimo-v2.6-pro-api` for the ordinary
+API. Keep them to check upstream compatibility with the original schemas.
+All entries send the original model IDs, `mimo-v2.6-flash` and `mimo-v2.6-pro`.
+The `-api-adapted` suffix selects the local API route, while `-adapted` selects
+the local Token Plan route.
 
 ## Checking whether Xiaomi has fixed the server
 
 ```bash
-check-mimo-grok                  # direct Xiaomi models
-check-mimo-grok --adapted        # models through the adapter
-check-mimo-grok --model pro      # direct Pro only
-check-mimo-grok --adapted --model flash --timeout 90 --json
+check-mimo-grok                         # direct Token Plan
+check-mimo-grok --adapted               # Token Plan through the adapter
+check-mimo-grok --api                   # direct ordinary API
+check-mimo-grok --api --adapted         # ordinary API through the adapter
+check-mimo-grok --api --adapted --model pro --timeout 90 --json
 ```
 
-By default, the checker tests the original `mimo-v2.6-flash` and `mimo-v2.6-pro`
-entries in your configuration. To check the upstream server, their `base_url`
-must point to the direct Xiaomi endpoint, as shown in the example.
+The default remains the original Token Plan entries. `--api` chooses the
+pay-as-you-go entries; `--adapted` chooses the matching local adapter entries.
+For direct checks, retain the direct `base_url` values from the example.
+The JSON report identifies the provider as `token_plan` or `api` and the route
+as `upstream` or `adapter`.
 
 Each model receives three checks:
 
@@ -210,7 +248,8 @@ The checker validates actual tool results. It creates a private temporary
 configuration copy and separate sessions, disables discovered MCP servers in
 that copy, preserves the original rules and permissions, and cleans up its own
 test processes and files. Inconclusive results are reported as `ERROR`.
-Requests to Xiaomi consume Token Plan quota.
+Token Plan checks consume subscription quota. `--api` checks incur ordinary
+API usage charges, including when combined with `--adapted`.
 
 | Exit code | Meaning |
 | --- | --- |
@@ -219,9 +258,11 @@ Requests to Xiaomi consume Token Plan quota.
 | `2` | Startup error or inconclusive result (`ERROR`) |
 | `130` | The check was interrupted |
 
-Tested on **2026-10-05** with Grok Build **1.0.46**: both direct models reproduced
-the `grep/read_file` failure; both models passed all six checks through the
-adapter. Later runs report the current state of the server and client.
+Tested on **2026-10-05** with Grok Build **1.0.46**: both models reproduced the
+`grep/read_file` failure through the direct Token Plan and ordinary API
+endpoints. Each of the four adapted model entries successfully completed
+`list_dir/high`, `grep` followed by `read_file/high`, and text/global-max in live
+checks. Later runs report the current state of the server and client.
 
 ## Updating the local installation
 
@@ -243,15 +284,16 @@ Verify the update:
 
 ```bash
 check-mimo-grok --adapted
+check-mimo-grok --api --adapted
 ```
 
 ## Security
 
 - The server binds exclusively to `127.0.0.1`.
-- Adapter logs contain HTTP status codes and normalized-field counts.
-  Request bodies, model output, and API keys are kept out of the logs.
-- Authorization is forwarded to the fixed Xiaomi endpoint. HTTP redirects are
-  disabled.
+- Adapter logs contain route labels, HTTP status codes, and normalized-field
+  counts. Request bodies, model output, and API keys are kept out of the logs.
+- Authorization is forwarded only to the fixed upstream selected by the exact
+  request path. HTTP redirects are disabled.
 - Keep keys, user configurations, and backups outside the repository.
 - The installer manages its own user unit and the three files listed above.
 

@@ -22,6 +22,7 @@ import urllib.parse
 import urllib.request
 
 UPSTREAM = "https://token-plan-sgp.xiaomimimo.com/v1"
+API_UPSTREAM = "https://api.xiaomimimo.com/v1"
 MODELS = {"mimo-v2.6-flash", "mimo-v2.6-pro"}
 MAX_BODY = 32 * 1024 * 1024
 HOP_HEADERS = {
@@ -66,8 +67,11 @@ class RelayServer(ThreadingHTTPServer):
     daemon_threads = True
     request_queue_size = 16
 
-    def __init__(self, address, upstream, timeout):
-        self.upstream = upstream.rstrip("/")
+    def __init__(self, address, upstream, timeout, api_upstream):
+        self.upstreams = {
+            "/v1/responses": upstream.rstrip("/"),
+            "/api/v1/responses": api_upstream.rstrip("/"),
+        }
         self.timeout_seconds = timeout
         self.slots = threading.BoundedSemaphore(16)
         self.opener = urllib.request.build_opener(NoRedirect())
@@ -134,9 +138,11 @@ class RelayHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def do_POST(self):
-        if self.path != "/v1/responses":
-            self.reply(404, "only /v1/responses is supported")
+        upstream = self.server.upstreams.get(self.path)
+        if upstream is None:
+            self.reply(404, "only /v1/responses and /api/v1/responses are supported")
             return
+        route = "api" if self.path == "/api/v1/responses" else "token_plan"
         if self.headers.get("Transfer-Encoding"):
             self.reply(411, "Content-Length is required")
             return
@@ -174,7 +180,7 @@ class RelayHandler(BaseHTTPRequestHandler):
         headers["Accept-Encoding"] = "identity"
         headers["Content-Length"] = str(len(payload))
         request = urllib.request.Request(
-            self.server.upstream + "/responses", data=payload, headers=headers, method="POST",
+            upstream + "/responses", data=payload, headers=headers, method="POST",
         )
         started = False
         try:
@@ -195,7 +201,7 @@ class RelayHandler(BaseHTTPRequestHandler):
                 while chunk := response.read1(64 * 1024):
                     self.wfile.write(chunk)
                     self.wfile.flush()
-                print(f"adapter: status={response.status} schema_fields={changed}",
+                print(f"adapter: route={route} status={response.status} schema_fields={changed}",
                       file=sys.stderr, flush=True)
         except (OSError, urllib.error.URLError, http.client.HTTPException):
             self.close_connection = True
@@ -204,18 +210,19 @@ class RelayHandler(BaseHTTPRequestHandler):
             print("adapter: upstream or client connection failed", file=sys.stderr, flush=True)
 
 
-def make_server(host, port, upstream=UPSTREAM, timeout=180):
+def make_server(host, port, upstream=UPSTREAM, timeout=180, *, api_upstream=API_UPSTREAM):
     if host != "127.0.0.1":
         raise ValueError("only IPv4 loopback binding is supported")
-    parsed = urllib.parse.urlsplit(upstream)
-    local = parsed.hostname in {"127.0.0.1", "localhost"}
-    if (parsed.scheme not in {"http", "https"} or not parsed.hostname
-            or parsed.username or parsed.password or parsed.query or parsed.fragment
-            or (parsed.scheme == "http" and not local)):
-        raise ValueError("upstream must be HTTPS or local HTTP, without credentials")
+    for origin in (upstream, api_upstream):
+        parsed = urllib.parse.urlsplit(origin)
+        local = parsed.hostname in {"127.0.0.1", "localhost"}
+        if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+                or parsed.username or parsed.password or parsed.query or parsed.fragment
+                or (parsed.scheme == "http" and not local)):
+            raise ValueError("upstream must be HTTPS or local HTTP, without credentials")
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("invalid timeout")
-    return RelayServer((host, port), upstream, timeout)
+    return RelayServer((host, port), upstream, timeout, api_upstream)
 
 
 def main():

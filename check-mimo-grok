@@ -21,6 +21,8 @@ import uuid
 
 MODELS = {"flash": "mimo-v2.6-flash", "pro": "mimo-v2.6-pro"}
 ADAPTED_MODELS = {name: model + "-adapted" for name, model in MODELS.items()}
+API_MODELS = {name: model + "-api" for name, model in MODELS.items()}
+API_ADAPTED_MODELS = {name: model + "-adapted" for name, model in API_MODELS.items()}
 TRANSIENT = {
     "sessions", "logs", "debug", "crash", "trace-exports", "memory", "memory-v2",
     "leader.sock", "leader.pid", "leader.log", "active_sessions.json", "agent_id",
@@ -309,6 +311,18 @@ def analyse(check, stdout, stderr, code, timed_out, fixture, token, control_ok):
     )
 
 
+def select_models(api=False, adapted=False, names=None):
+    direct = API_MODELS if api else MODELS
+    normalized = API_ADAPTED_MODELS if api else ADAPTED_MODELS
+    selected = normalized if adapted else direct
+    translated = {**selected, **{MODELS[key]: selected[key] for key in MODELS}}
+    translated.update({API_MODELS[key]: API_ADAPTED_MODELS[key] if adapted else API_MODELS[key]
+                       for key in API_MODELS})
+    if api:
+        translated.update({ADAPTED_MODELS[key]: API_ADAPTED_MODELS[key] for key in MODELS})
+    return list(dict.fromkeys(translated.get(name, name) for name in (names or MODELS)))
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Quick MiMo/Grok compatibility check: tools at high and global max.",
@@ -316,21 +330,27 @@ def main():
                "Requests consume MiMo quota. Settings and permissions are preserved.",
     )
     parser.add_argument("--model", action="append",
-                        choices=[*MODELS, *MODELS.values(), *ADAPTED_MODELS.values()],
-                        help="flash / pro or full slug; defaults to both original models")
+                        choices=[*MODELS, *MODELS.values(), *ADAPTED_MODELS.values(),
+                                 *API_MODELS.values(), *API_ADAPTED_MODELS.values()],
+                        help="flash / pro or full slug; defaults to both Token Plan models")
+    parser.add_argument("--api", action="store_true",
+                        help="check ordinary pay-as-you-go API models; combine with --adapted for the API route")
     parser.add_argument("--adapted", action="store_true",
                         help="check alternative models through the local adapter")
     parser.add_argument("--timeout", type=positive_timeout, default=60,
                         help="timeout per invocation in seconds (default: 60)")
     parser.add_argument("--json", action="store_true", help="print a single JSON report")
     args = parser.parse_args()
-    selected = ADAPTED_MODELS if args.adapted else MODELS
-    translated = {**selected, **{MODELS[key]: selected[key] for key in MODELS}}
-    models = list(dict.fromkeys(translated.get(name, name) for name in (args.model or MODELS)))
+    models = select_models(api=args.api, adapted=args.adapted, names=args.model)
     source = Path(os.environ.get("GROK_HOME", Path.home() / ".grok")).expanduser().resolve()
     config = source / "config.toml"
-    route = "adapter" if any(model in ADAPTED_MODELS.values() for model in models) else "upstream"
-    report = {"version": "unknown", "route": route, "results": [], "config_unchanged": True}
+    adapted_slugs = {*ADAPTED_MODELS.values(), *API_ADAPTED_MODELS.values()}
+    api_slugs = {*API_MODELS.values(), *API_ADAPTED_MODELS.values()}
+    route = "adapter" if any(model in adapted_slugs for model in models) else "upstream"
+    provider = "api" if all(model in api_slugs for model in models) else (
+        "mixed" if any(model in api_slugs for model in models) else "token_plan")
+    report = {"version": "unknown", "route": route, "provider": provider,
+              "results": [], "config_unchanged": True}
     before = None
     interrupted = False
     try:
@@ -346,6 +366,8 @@ def main():
         report["version"] = version.stdout.strip().splitlines()[0]
         if not args.json:
             print(report["version"], flush=True)
+            print("Provider: " + {"api": "Xiaomi pay-as-you-go API.", "token_plan": "Xiaomi Token Plan.",
+                                  "mixed": "mixed model entries."}[provider], flush=True)
             print("Route: " + ("local adapter." if route == "adapter" else "direct Xiaomi server."), flush=True)
             print("Checks: list_dir/high, grep+read_file/high, and a global max request.", flush=True)
         with tempfile.TemporaryDirectory(prefix="mimo-grok-check-") as temporary:
