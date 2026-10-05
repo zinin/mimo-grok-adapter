@@ -1,0 +1,21 @@
+[Unit]
+Description=MiMo tool-schema adapter for Grok Build
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -u %h/.local/bin/mimo-grok-adapter --port 8320 --timeout 180
+WorkingDirectory=%h
+Environment=PYTHONDONTWRITEBYTECODE=1
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=10
+NoNewPrivileges=true
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

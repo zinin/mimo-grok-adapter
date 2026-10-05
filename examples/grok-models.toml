@@ -1,0 +1,42 @@
+# Merge the missing model sections into ~/.grok/config.toml.
+# Supply your Singapore Xiaomi Token Plan key through MIMO_API_KEY.
+# Keep existing [models] defaults and avoid duplicate [model.*] sections.
+
+[model."mimo-v2.6-flash-adapted"]
+model = "mimo-v2.6-flash"
+name = "MiMo-V2.6-Flash [local adapter]"
+base_url = "http://127.0.0.1:8320/v1"
+api_backend = "responses"
+env_key = "MIMO_API_KEY"
+context_window = 1048576
+max_request_bytes = 33554432
+reasoning_effort = "high"
+
+[model."mimo-v2.6-pro-adapted"]
+model = "mimo-v2.6-pro"
+name = "MiMo-V2.6-Pro [local adapter]"
+base_url = "http://127.0.0.1:8320/v1"
+api_backend = "responses"
+env_key = "MIMO_API_KEY"
+context_window = 1048576
+max_request_bytes = 33554432
+reasoning_effort = "high"
+
+# Optional direct entries for checking whether Xiaomi has fixed the server bug.
+[model."mimo-v2.6-flash"]
+model = "mimo-v2.6-flash"
+name = "MiMo-V2.6-Flash [direct Xiaomi]"
+base_url = "https://token-plan-sgp.xiaomimimo.com/v1"
+api_backend = "responses"
+env_key = "MIMO_API_KEY"
+context_window = 1048576
+reasoning_effort = "high"
+
+[model."mimo-v2.6-pro"]
+model = "mimo-v2.6-pro"
+name = "MiMo-V2.6-Pro [direct Xiaomi]"
+base_url = "https://token-plan-sgp.xiaomimimo.com/v1"
+api_backend = "responses"
+env_key = "MIMO_API_KEY"
+context_window = 1048576
+reasoning_effort = "high"

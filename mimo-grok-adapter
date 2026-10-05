@@ -1,0 +1,246 @@
+#!/usr/bin/env python3
+"""Loopback MiMo Responses relay for Grok's nullable tool schemas.
+
+Python 3.11+; standard library only. Authorization comes from the client.
+Only tool-schema type arrays with one non-null type are narrowed. Optional
+properties remain optional; explicit null values lose their schema allowance.
+Upstream response bodies, including SSE, pass through unchanged. Request bodies,
+credentials and model output are never logged. This does not repair other API bugs.
+"""
+
+import argparse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import http.client
+import json
+import math
+import os
+import signal
+import sys
+import threading
+import urllib.error
+import urllib.parse
+import urllib.request
+
+UPSTREAM = "https://token-plan-sgp.xiaomimimo.com/v1"
+MODELS = {"mimo-v2.6-flash", "mimo-v2.6-pro"}
+MAX_BODY = 32 * 1024 * 1024
+HOP_HEADERS = {
+    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+    "te", "trailer", "transfer-encoding", "upgrade", "proxy-connection",
+}
+
+
+def normalize_tools(body):
+    """Mutate only the tools tree; return the number of narrowed type arrays."""
+    def visit(node):
+        count = 0
+        if isinstance(node, dict):
+            types = node.get("type")
+            if isinstance(types, list) and "null" in types:
+                nonnull = [value for value in types if value != "null"]
+                if len(nonnull) == 1:
+                    node["type"] = nonnull[0]
+                    count += 1
+            for value in node.values():
+                count += visit(value)
+        elif isinstance(node, list):
+            for value in node:
+                count += visit(value)
+        return count
+    return visit(body.get("tools", []))
+
+
+def hop_headers(headers):
+    return HOP_HEADERS | {
+        value.strip().lower() for value in headers.get("Connection", "").split(",")
+    }
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    # Never send the client's authorization to a different origin.
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        return None
+
+
+class RelayServer(ThreadingHTTPServer):
+    daemon_threads = True
+    request_queue_size = 16
+
+    def __init__(self, address, upstream, timeout):
+        self.upstream = upstream.rstrip("/")
+        self.timeout_seconds = timeout
+        self.slots = threading.BoundedSemaphore(16)
+        self.opener = urllib.request.build_opener(NoRedirect())
+        super().__init__(address, RelayHandler)
+
+    def get_request(self):
+        connection, address = super().get_request()
+        connection.settimeout(min(self.timeout_seconds, 30))
+        return connection, address
+
+    def process_request(self, request, address):
+        if not self.slots.acquire(blocking=False):
+            request.close()
+            return
+        try:
+            super().process_request(request, address)
+        except BaseException:
+            self.slots.release()
+            raise
+
+    def process_request_thread(self, request, address):
+        try:
+            super().process_request_thread(request, address)
+        finally:
+            self.slots.release()
+
+    def handle_error(self, request, address):
+        print("adapter: request handler failed", file=sys.stderr, flush=True)
+
+
+class RelayHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    server_version = "mimo-grok-adapter"
+    sys_version = ""
+
+    def log_message(self, *args):
+        pass
+
+    def send_error(self, code, message=None, explain=None):
+        # BaseHTTPRequestHandler may otherwise echo untrusted request text.
+        self.reply(code, "unsupported or malformed request")
+
+    def reply(self, status, message):
+        payload = json.dumps({"error": {"message": message}}).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        self.wfile.write(payload)
+
+    def do_GET(self):
+        if self.path != "/health":
+            self.reply(404, "unknown endpoint")
+            return
+        payload = json.dumps({"status": "ok", "pid": os.getpid()}).encode() + b"\n"
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        self.wfile.write(payload)
+
+    def do_POST(self):
+        if self.path != "/v1/responses":
+            self.reply(404, "only /v1/responses is supported")
+            return
+        if self.headers.get("Transfer-Encoding"):
+            self.reply(411, "Content-Length is required")
+            return
+        lengths = self.headers.get_all("Content-Length", [])
+        try:
+            length = int(lengths[0]) if len(lengths) == 1 else -1
+        except ValueError:
+            length = -1
+        if not 0 < length <= MAX_BODY:
+            self.reply(413 if length > MAX_BODY else 411, "invalid request body length")
+            return
+        try:
+            raw = self.rfile.read(length)
+            if len(raw) != length:
+                self.reply(400, "incomplete request body")
+                return
+            body = json.loads(raw)
+            if not isinstance(body, dict):
+                self.reply(400, "JSON object required")
+                return
+            if body.get("model") not in MODELS:
+                self.reply(400, "unsupported model")
+                return
+            changed = normalize_tools(body)
+            payload = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode()
+        except (ValueError, UnicodeError, RecursionError, TypeError):
+            self.reply(400, "invalid JSON request")
+            return
+        if not self.headers.get("Authorization"):
+            self.reply(401, "Authorization is required")
+            return
+        blocked = hop_headers(self.headers) | {"host", "content-length", "accept-encoding"}
+        headers = {name: value for name, value in self.headers.items() if name.lower() not in blocked}
+        headers["Content-Type"] = "application/json"
+        headers["Accept-Encoding"] = "identity"
+        headers["Content-Length"] = str(len(payload))
+        request = urllib.request.Request(
+            self.server.upstream + "/responses", data=payload, headers=headers, method="POST",
+        )
+        started = False
+        try:
+            try:
+                response = self.server.opener.open(request, timeout=self.server.timeout_seconds)
+            except urllib.error.HTTPError as error:
+                response = error
+            with response:
+                self.send_response(response.status)
+                blocked = hop_headers(response.headers) | {"server", "date"}
+                for name, value in response.headers.items():
+                    if name.lower() not in blocked:
+                        self.send_header(name, value)
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.close_connection = True
+                started = True
+                while chunk := response.read1(64 * 1024):
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+                print(f"adapter: status={response.status} schema_fields={changed}",
+                      file=sys.stderr, flush=True)
+        except (OSError, urllib.error.URLError, http.client.HTTPException):
+            self.close_connection = True
+            if not started:
+                self.reply(502, "upstream connection failed")
+            print("adapter: upstream or client connection failed", file=sys.stderr, flush=True)
+
+
+def make_server(host, port, upstream=UPSTREAM, timeout=180):
+    if host != "127.0.0.1":
+        raise ValueError("only IPv4 loopback binding is supported")
+    parsed = urllib.parse.urlsplit(upstream)
+    local = parsed.hostname in {"127.0.0.1", "localhost"}
+    if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+            or parsed.username or parsed.password or parsed.query or parsed.fragment
+            or (parsed.scheme == "http" and not local)):
+        raise ValueError("upstream must be HTTPS or local HTTP, without credentials")
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("invalid timeout")
+    return RelayServer((host, port), upstream, timeout)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--port", type=int, default=8320)
+    parser.add_argument("--timeout", type=float, default=180,
+                        help="upstream socket timeout in seconds (default: 180)")
+    args = parser.parse_args()
+    try:
+        server = make_server("127.0.0.1", args.port, UPSTREAM, args.timeout)
+    except (OSError, ValueError):
+        print("adapter: invalid settings or listen port unavailable", file=sys.stderr)
+        return 2
+    def stop(_signum, _frame):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, stop)
+    print(f"adapter: listening on 127.0.0.1:{server.server_port}", file=sys.stderr, flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
