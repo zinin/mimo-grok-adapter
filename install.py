@@ -29,9 +29,9 @@ def systemctl(*args, required=True):
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                 timeout=30)
     except (OSError, subprocess.SubprocessError) as error:
-        raise InstallError('systemctl --user недоступен или превысил таймаут.') from error
+        raise InstallError('systemctl --user is unavailable or timed out.') from error
     if required and result.returncode:
-        raise InstallError('Ошибка systemctl --user: ' + args[0] + '.')
+        raise InstallError('systemctl --user failed: ' + args[0] + '.')
     return result.returncode == 0
 
 
@@ -41,9 +41,9 @@ def main_pid():
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=10)
         pid = int(result.stdout.strip())
     except (OSError, ValueError, subprocess.SubprocessError) as error:
-        raise InstallError('PID пользовательского сервиса недоступен.') from error
+        raise InstallError('The user service PID is unavailable.') from error
     if result.returncode or pid <= 0:
-        raise InstallError('Пользовательский сервис не имеет работающего процесса.')
+        raise InstallError('The user service has no running process.')
     return pid
 
 
@@ -60,7 +60,7 @@ def wait_for_health(url='http://127.0.0.1:8320/health', timeout=10, expected_pid
         except (OSError, urllib.error.URLError, ValueError, AttributeError):
             pass
         time.sleep(0.2)
-    raise InstallError('Адаптер не прошёл локальную проверку /health.')
+    raise InstallError('The adapter failed the local /health check.')
 
 
 def atomic_write(path, data, mode):
@@ -91,12 +91,12 @@ def snapshot(files):
     previous = {}
     for source, target, mode in files:
         if not source.is_file() or source.is_symlink():
-            raise InstallError('Отсутствует обычный исходный файл: ' + source.name)
+            raise InstallError('Missing regular source file: ' + source.name)
         if target.is_symlink() or (target.exists() and not target.is_file()):
-            raise InstallError('Конечный путь должен быть обычным файлом: ' + str(target))
+            raise InstallError('The destination path must be a regular file: ' + str(target))
         if target.exists():
             if target.stat().st_uid != os.getuid():
-                raise InstallError('Конечный файл принадлежит другому пользователю: ' + str(target))
+                raise InstallError('The destination file belongs to another user: ' + str(target))
             previous[target] = (target.read_bytes(), target.stat().st_mode & 0o777)
         else:
             previous[target] = None
@@ -135,27 +135,27 @@ def restore_files(previous, changed):
 
 def preflight(no_start):
     if sys.version_info < (3, 11) or sys.platform != 'linux':
-        raise InstallError('Требуются Linux и Python 3.11+.')
+        raise InstallError('Linux and Python 3.11+ are required.')
     if os.geteuid() == 0:
-        raise InstallError('Запускайте от обычного пользователя без sudo.')
+        raise InstallError('Run as your regular user; elevated privileges are unsupported.')
     try:
         version = subprocess.run(['/usr/bin/python3', '-c',
                                   'import sys; sys.exit(sys.version_info < (3, 11))'],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
     except (OSError, subprocess.SubprocessError) as error:
-        raise InstallError('Требуется /usr/bin/python3 версии 3.11+.') from error
+        raise InstallError('/usr/bin/python3 version 3.11+ is required.') from error
     if version.returncode:
-        raise InstallError('Требуется /usr/bin/python3 версии 3.11+.')
+        raise InstallError('/usr/bin/python3 version 3.11+ is required.')
     if not no_start:
         if shutil.which('systemctl') is None:
-            raise InstallError('Требуется systemctl; для установки только файлов используйте --no-start.')
+            raise InstallError('systemctl is required; use --no-start for file-only installation.')
         systemctl('show-environment')
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--no-start', action='store_true',
-                        help='установить только файлы без обращения к systemd')
+                        help='install files only and leave systemd unchanged')
     args = parser.parse_args(argv)
     home = Path.home()
     previous, changed = {}, []
@@ -181,18 +181,18 @@ def main(argv=None):
             pid = main_pid()
             wait_for_health(expected_pid=pid)
             if not systemctl('is-active', '--quiet', UNIT, required=False) or main_pid() != pid:
-                raise InstallError('Процесс пользовательского сервиса остановился или сменился после запуска.')
-        print('Установлены ~/.local/bin/mimo-grok-adapter, ~/.local/bin/check-mimo-grok')
-        print('и ~/.config/systemd/user/' + UNIT)
+                raise InstallError('The user service process stopped or changed after startup.')
+        print('Installed ~/.local/bin/mimo-grok-adapter, ~/.local/bin/check-mimo-grok')
+        print('and ~/.config/systemd/user/' + UNIT)
         if backup:
-            print('Резервная копия: ' + str(backup))
-        print('Файлы установлены; systemd сохранён без изменений.' if args.no_start
-              else 'User service включён, запущен и прошёл /health.')
+            print('Backup: ' + str(backup))
+        print('Files installed; systemd unchanged.' if args.no_start
+              else 'User service enabled, started, and verified through /health.')
         return 0
     except (InstallError, OSError, subprocess.SubprocessError) as error:
         # Do not echo external command output, which can contain credentials.
         message = str(error) if isinstance(error, InstallError) else type(error).__name__
-        print('Установка завершилась с ошибкой: ' + message, file=sys.stderr)
+        print('Installation failed: ' + message, file=sys.stderr)
         failed_paths = restore_files(previous, changed)
         if service_touched:
             try:
@@ -204,13 +204,13 @@ def main(argv=None):
                 if was_active:
                     systemctl('restart', UNIT)
             except InstallError:
-                print('Состояние сервиса требует ручной проверки.', file=sys.stderr)
+                print('The service state requires manual inspection.', file=sys.stderr)
         if failed_paths:
-            print('Файлы требуют ручного восстановления: ' + ', '.join(failed_paths), file=sys.stderr)
+            print('Files requiring manual recovery: ' + ', '.join(failed_paths), file=sys.stderr)
         elif changed:
-            print('Предыдущие файлы восстановлены.', file=sys.stderr)
+            print('Previous files restored.', file=sys.stderr)
         if backup:
-            print('Резервная копия: ' + str(backup), file=sys.stderr)
+            print('Backup: ' + str(backup), file=sys.stderr)
         return 2
 
 

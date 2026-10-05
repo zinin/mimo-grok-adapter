@@ -1,108 +1,109 @@
 # MiMo Grok Adapter
 
-Локальный адаптер для **MiMo-V2.6-Flash** и **MiMo-V2.6-Pro** в **Grok Build**.
-Обходит проверенную несовместимость nullable-типов в схемах инструментов Xiaomi
-MiMo Token Plan, из-за которой вызовы `grep` и `read_file` могут приходить с
-повреждённым JSON или сырым XML.
+A local adapter for **MiMo-V2.6-Flash** and **MiMo-V2.6-Pro** in **Grok Build**.
+It works around a confirmed nullable-type incompatibility in Xiaomi MiMo Token
+Plan tool schemas that can produce truncated JSON arguments or raw XML tool calls
+when using `grep` and `read_file`.
 
 ```text
 Grok Build → http://127.0.0.1:8320/v1/responses → Xiaomi Token Plan Singapore
-                      нормализация схем tools
+                      tool-schema normalization
 ```
 
-Проект использует стандартную библиотеку Python. Поддерживается OpenAI Responses
-API. В состав входят адаптер, диагностика и установщик пользовательского
-systemd-сервиса.
+The project uses the Python standard library and supports the OpenAI Responses
+API. It includes the adapter, a compatibility checker, and a systemd user-service
+installer.
 
-## Как работает исправление
+## How the workaround works
 
-Перед отправкой запроса адаптер обходит дерево `tools` и заменяет типы с одним
-ненулевым вариантом:
+Before forwarding a request, the adapter walks the `tools` tree and narrows type
+arrays containing a single non-null type:
 
 ```json
 {"type": ["string", "null"]}
 ```
 
-на:
+to:
 
 ```json
 {"type": "string"}
 ```
 
-Преобразование также применяется к вложенным схемам и инструментам в namespace.
-Поля `required` сохраняются, необязательные параметры остаются необязательными.
-Промпты, история сообщений и параметры reasoning сохраняются. Ответы Xiaomi,
-включая поток событий, передаются без преобразования и без ожидания окончания
-генерации.
+The transformation also applies to nested schemas and namespaced tools.
+`required` fields are preserved, and optional parameters remain optional.
+Prompts, message history, and reasoning parameters retain their original values.
+Xiaomi response bodies, including streamed events, pass through unchanged and
+are forwarded as they arrive.
 
-### Границы исправления
+### Scope and limitations
 
-- Явный `null` теряет допуск в преобразованной схеме.
-- Union с несколькими ненулевыми типами, например `["string", "integer", "null"]`,
-  сохраняется. Конструкции `anyOf`/`oneOf` не преобразуются в скалярный тип.
-- Адаптер поддерживает POST `/v1/responses` и две указанные модели.
-- Upstream закреплён на `https://token-plan-sgp.xiaomimimo.com/v1`.
-  Нужен ключ **Singapore Token Plan** для этого endpoint.
-- Адаптер исправляет конкретную несовместимость схем. Совместимость каждого
-  возможного инструмента и всех будущих версий Grok требует отдельной проверки.
-- Ограничения: тело запроса до 32 MiB, до 16 одновременных обработчиков,
-  upstream socket timeout 180 секунд.
+- Explicit `null` loses its schema allowance after normalization.
+- Unions with multiple non-null types, such as `["string", "integer", "null"]`,
+  remain unchanged. `anyOf`/`oneOf` constructs are preserved.
+- The adapter supports POST `/v1/responses` and the two models listed above.
+- The upstream is fixed to `https://token-plan-sgp.xiaomimimo.com/v1`.
+  This endpoint requires a **Singapore Token Plan** key.
+- The workaround addresses a specific schema incompatibility. Compatibility
+  with every possible tool and future Grok version requires separate testing.
+- Limits: a 32 MiB request body, up to 16 concurrent handlers, and a 180-second
+  upstream socket timeout.
 
-## Требования
+## Requirements
 
-- Linux с пользовательским systemd и доступной пользовательской сессией.
-- Python **3.11+**, в том числе `/usr/bin/python3`, используемый сервисом.
-- Git для клонирования и обновления; Bash и curl для установки одной командой.
-- Grok Build и Singapore Xiaomi Token Plan API key для работы с моделью.
+- Linux with a systemd user manager and an available user session.
+- Python **3.11+**, including `/usr/bin/python3`, which the service uses.
+- Git for cloning and updates; Bash and curl for one-command installation.
+- Grok Build and a Singapore Xiaomi Token Plan API key to use the models.
 
-На Ubuntu зависимости можно установить через `apt`:
+On Ubuntu, install the dependencies with `apt`:
 
 ```bash
 sudo apt update
 sudo apt install python3 git curl
 ```
 
-Проверьте, что версия Python в вашей версии Ubuntu удовлетворяет требованию 3.11+.
-Python-пакеты из PyPI для этого проекта не требуются.
+Check that your Ubuntu release provides Python 3.11 or newer. All Python code in
+this project uses the standard library.
 
-## Установка
+## Installation
 
-### Одной командой через curl
+### One-command installation with curl
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zinin/mimo-grok-adapter/master/install.sh | bash
 ```
 
-Команда загружает и выполняет `install.sh` из ветки **master**. Скрипт клонирует
-репозиторий в `${XDG_DATA_HOME:-$HOME/.local/share}/mimo-grok-adapter` и запускает
-`install.py`. Повторный запуск обновляет чистый checkout через `git pull --ff-only`
-и переустанавливает сервис. Checkout сохраняется для последующих обновлений.
+This command downloads and runs `install.sh` from the **master** branch. The
+script clones the repository into
+`${XDG_DATA_HOME:-$HOME/.local/share}/mimo-grok-adapter` and runs `install.py`.
+Running it again updates a clean checkout with `git pull --ff-only` and
+reinstalls the service. The checkout is retained for future updates.
 
-Для использования существующего локального зеркала или другого каталога:
+To use an existing local clone or another directory:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zinin/mimo-grok-adapter/master/install.sh \
   | MIMO_GROK_REPO_DIR=/opt/github/zinin/mimo-grok-adapter bash
 ```
 
-`MIMO_GROK_REPO_DIR` задаёт абсолютный путь. Существующий checkout должен находиться
-на ветке `master`, иметь origin этого репозитория и сохранённые локальные изменения.
-При обнаружении постороннего каталога, другой ветки или несохранённых изменений
-скрипт останавливается и сохраняет пользовательские файлы.
+`MIMO_GROK_REPO_DIR` specifies an absolute path. An existing checkout must be on
+`master`, point to this repository through `origin`, and have a clean working
+tree. The script stops and preserves user files when it finds an unrelated
+directory, a different branch, or uncommitted changes.
 
-Для установки только файлов:
+To install files only:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zinin/mimo-grok-adapter/master/install.sh \
   | bash -s -- --no-start
 ```
 
-Используется Bash. Выполняйте команду от обычного пользователя. Для
-предварительного просмотра кода используйте ручное клонирование ниже.
+The script requires Bash. Run it as your regular user. To review the code before
+executing it, use the manual clone procedure below.
 
-### Через Git
+### Installation from Git
 
-Клонируйте репозиторий в выбранный каталог. Для локального зеркала в
+Clone the repository into your preferred directory. For a local mirror under
 `/opt/github/zinin`:
 
 ```bash
@@ -111,40 +112,40 @@ cd /opt/github/zinin/mimo-grok-adapter
 ./install.py
 ```
 
-Из локального checkout также можно запускать `./install.sh`; он передаёт параметры
-существующему Python-установщику.
+You can also run `./install.sh` from a local checkout. It forwards arguments to
+the Python installer.
 
-Запускайте установщик от своего обычного пользователя. Он устанавливает:
+Run the installer as your regular user. It installs these files:
 
-| Источник | Установленный файл |
+| Source | Installed file |
 | --- | --- |
 | `mimo-grok-adapter` | `~/.local/bin/mimo-grok-adapter` |
 | `check-mimo-grok` | `~/.local/bin/check-mimo-grok` |
 | `systemd/mimo-grok-adapter.service` | `~/.config/systemd/user/mimo-grok-adapter.service` |
 
-Затем выполняет `systemctl --user daemon-reload`, включает автозапуск,
-перезапускает `mimo-grok-adapter.service` и проверяет его локальный `/health`.
-PID из `/health` сверяется с `MainPID` активного user unit: успешный ответ другого
-процесса на занятом порту завершает установку откатом.
-Сервис запускается пользовательским systemd и перезапускается при сбое.
-`linger` и другие сервисы установщик сохраняет без изменений.
+It then runs `systemctl --user daemon-reload`, enables automatic startup,
+restarts `mimo-grok-adapter.service`, and checks its local `/health` endpoint.
+The PID returned by `/health` must match `MainPID` of the active user unit. A
+response from another process occupying the port causes the installer to roll
+back. The service starts through the systemd user manager and restarts on
+failure. The installer preserves `linger` settings and other services.
 
-Существующие версии этих трёх файлов сохраняются с приватными правами в
-`~/.local/state/mimo-grok-adapter/backups/<timestamp-id>/`. При ошибке установки
-установщик восстанавливает предыдущие файлы и пытается восстановить предыдущее
-состояние своего сервиса. Символические ссылки в конечных путях отклоняются.
-Резервные копии остаются доступными для ручного восстановления.
+Existing versions of these three files are saved with private permissions under
+`~/.local/state/mimo-grok-adapter/backups/<timestamp-id>/`. If installation fails,
+the installer restores the previous files and attempts to restore its service
+to its previous state. Symbolic links at destination file paths are rejected.
+Backups remain available for manual recovery.
 
-`~/.grok/config.toml`, ключи API, разрешения, hooks и глобальные настройки Grok
-установщик оставляет без изменений. Убедитесь, что `~/.local/bin` есть в `PATH`.
+The installer preserves `~/.grok/config.toml`, API keys, permissions, hooks, and
+global Grok settings. Make sure `~/.local/bin` is included in `PATH`.
 
-Для установки только файлов, без обращения к systemd:
+To install files only and leave systemd unchanged:
 
 ```bash
 ./install.py --no-start
 ```
 
-Проверка сервиса:
+Check the service:
 
 ```bash
 systemctl --user status mimo-grok-adapter.service
@@ -152,18 +153,19 @@ curl --noproxy '*' http://127.0.0.1:8320/health
 journalctl --user -u mimo-grok-adapter.service -f
 ```
 
-`/health` проверяет локальный процесс; работоспособность модели проверяется
-диагностическим скриптом ниже.
+`/health` checks the local process. Use the compatibility checker below to test
+model behavior.
 
-## Настройка Grok
+## Grok configuration
 
-Добавьте недостающие секции из [`examples/grok-models.toml`](examples/grok-models.toml)
-в `~/.grok/config.toml`. Если секция модели уже существует, обновите её поля:
-повторное объявление той же таблицы нарушает формат TOML. Сохраните свои
-`[models]` defaults и существующие прямые модели.
+Add the missing sections from
+[`examples/grok-models.toml`](examples/grok-models.toml) to
+`~/.grok/config.toml`. Update the fields of any model section that already
+exists: declaring the same TOML table twice is invalid. Preserve your
+`[models]` defaults and existing direct-model entries.
 
-Пример использует `env_key = "MIMO_API_KEY"`. Перед запуском Grok передайте ключ
-через окружение, например интерактивно:
+The example uses `env_key = "MIMO_API_KEY"`. Supply the key through the
+environment before starting Grok, for example with an interactive prompt:
 
 ```bash
 read -rsp 'Singapore Xiaomi Token Plan API key: ' MIMO_API_KEY
@@ -171,60 +173,60 @@ printf '\n'
 export MIMO_API_KEY
 ```
 
-Если ключ уже настроен в вашем Grok, сохраните существующий способ авторизации.
-Адаптер получает `Authorization` от клиента и пересылает его Xiaomi; отдельный
-ключ в systemd unit не требуется.
+If your key is already configured in Grok, retain your existing authentication
+method. The adapter receives `Authorization` from the client and forwards it to
+Xiaomi. Authentication stays in the client configuration.
 
-Запуск моделей через адаптер:
+Start the models through the adapter:
 
 ```bash
 grok -m mimo-v2.6-flash-adapted --effort high
 grok -m mimo-v2.6-pro-adapted --effort high
 ```
 
-На проводе отправляются исходные IDs `mimo-v2.6-flash` и `mimo-v2.6-pro`.
-Суффикс `-adapted` обозначает локальные альтернативные записи в Grok.
+Requests send the original model IDs, `mimo-v2.6-flash` and `mimo-v2.6-pro`.
+The `-adapted` suffix identifies the alternative local entries in Grok.
 
-## Диагностика исправления на стороне Xiaomi
+## Checking whether Xiaomi has fixed the server
 
 ```bash
-check-mimo-grok                  # прямые модели Xiaomi
-check-mimo-grok --adapted        # модели через адаптер
-check-mimo-grok --model pro      # только Pro напрямую
+check-mimo-grok                  # direct Xiaomi models
+check-mimo-grok --adapted        # models through the adapter
+check-mimo-grok --model pro      # direct Pro only
 check-mimo-grok --adapted --model flash --timeout 90 --json
 ```
 
-По умолчанию проверяются исходные `mimo-v2.6-flash` и `mimo-v2.6-pro`, используя
-их записи в вашем конфиге. Для проверки upstream их `base_url` должен указывать
-на прямой endpoint Xiaomi, как в примере.
+By default, the checker tests the original `mimo-v2.6-flash` and `mimo-v2.6-pro`
+entries in your configuration. To check the upstream server, their `base_url`
+must point to the direct Xiaomi endpoint, as shown in the example.
 
-Проверки для каждой модели:
+Each model receives three checks:
 
-1. Нативный `list_dir` при `high` как контрольный запрос.
-2. Последовательность нативных `grep` и `read_file` при `high`.
-3. Текстовый запрос с глобальным reasoning effort `max`.
+1. A native `list_dir` call at `high` as a control request.
+2. A sequence of native `grep` and `read_file` calls at `high`.
+3. A text request with global reasoning effort set to `max`.
 
-Диагностика проверяет реальные результаты инструментов. Она создаёт приватную
-временную копию конфигурации и отдельные сессии, отключает обнаруженные MCP-серверы
-только в этой копии, сохраняет исходные правила и разрешения, очищает собственные
-тестовые процессы и файлы. Неопределённый результат обозначается `ERROR`.
-Запросы к Xiaomi расходуют квоту Token Plan.
+The checker validates actual tool results. It creates a private temporary
+configuration copy and separate sessions, disables discovered MCP servers in
+that copy, preserves the original rules and permissions, and cleans up its own
+test processes and files. Inconclusive results are reported as `ERROR`.
+Requests to Xiaomi consume Token Plan quota.
 
-| Код выхода | Значение |
+| Exit code | Meaning |
 | --- | --- |
-| `0` | Все проверки прошли (`OK`) |
-| `1` | Воспроизведён известный сбой (`BUG`) |
-| `2` | Ошибка запуска или неопределённый результат (`ERROR`) |
-| `130` | Проверка прервана |
+| `0` | All checks passed (`OK`) |
+| `1` | A known failure was reproduced (`BUG`) |
+| `2` | Startup error or inconclusive result (`ERROR`) |
+| `130` | The check was interrupted |
 
-Проверено **2026-10-05**, Grok Build **1.0.46**: напрямую обе модели воспроизводили
-ошибку `grep/read_file`; через адаптер обе прошли все шесть проверок.
-Результаты последующих запусков показывают текущее состояние сервера и клиента.
+Tested on **2026-10-05** with Grok Build **1.0.46**: both direct models reproduced
+the `grep/read_file` failure; both models passed all six checks through the
+adapter. Later runs report the current state of the server and client.
 
-## Обновление локальной установки
+## Updating the local installation
 
-Для установки через curl повторите выбранную команду из раздела установки.
-Для checkout в `/opt/github/zinin/mimo-grok-adapter`:
+For curl installations, repeat your chosen command from the installation
+section. For a checkout at `/opt/github/zinin/mimo-grok-adapter`:
 
 ```bash
 cd /opt/github/zinin/mimo-grok-adapter
@@ -232,37 +234,38 @@ git pull --ff-only
 ./install.py
 ```
 
-Установщик повторно копирует текущую версию из checkout в те же пути, сохраняет
-предыдущую версию и перезапускает сервис. Работающий сервис использует
-установленную копию и продолжает работать независимо от расположения checkout.
-Обновляйте между запросами: перезапуск прерывает активные подключения.
+The installer copies the current checkout into the same installed paths,
+backs up the previous version, and restarts the service. The running service
+uses the installed copy and operates independently of the checkout location.
+Update between requests: restarting the service interrupts active connections.
 
-Для проверки после обновления:
+Verify the update:
 
 ```bash
 check-mimo-grok --adapted
 ```
 
-## Безопасность
+## Security
 
-- Слушает только `127.0.0.1`; доступ из внешней сети закрыт адресом привязки.
-- В журнал адаптера попадают статус HTTP и число преобразованных полей.
-  Содержимое запросов, вывод модели и API-ключи не журналируются.
-- Авторизация пересылается фиксированному Xiaomi endpoint; автоматическое
-  следование HTTP redirect отключено.
-- Ключи, пользовательские конфиги и резервные копии храните вне репозитория.
-- Установщик управляет только собственным user unit и тремя указанными файлами.
+- The server binds exclusively to `127.0.0.1`.
+- Adapter logs contain HTTP status codes and normalized-field counts.
+  Request bodies, model output, and API keys are kept out of the logs.
+- Authorization is forwarded to the fixed Xiaomi endpoint. HTTP redirects are
+  disabled.
+- Keep keys, user configurations, and backups outside the repository.
+- The installer manages its own user unit and the three files listed above.
 
-## Разработка и тесты
+## Development and tests
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover -s tests -v
 ```
 
-Тесты используют временные HOME, локальные HTTP fixtures и изолированный
-`systemctl` stub. API-ключи Xiaomi и реальный пользовательский systemd для них
-не требуются; платные запросы к моделям выполняются только отдельной диагностикой.
+Tests use temporary HOME directories, local HTTP fixtures, and isolated
+`systemctl` and Git stubs. They run without Xiaomi API keys or a real systemd
+user manager. Live model requests are made separately by the compatibility
+checker.
 
-## Лицензия
+## License
 
 [MIT](LICENSE).

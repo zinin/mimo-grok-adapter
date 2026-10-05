@@ -46,9 +46,9 @@ def positive_timeout(value):
     try:
         number = float(value)
     except ValueError as exc:
-        raise argparse.ArgumentTypeError("timeout должен быть положительным числом") from exc
+        raise argparse.ArgumentTypeError("timeout must be a positive number") from exc
     if not math.isfinite(number) or number <= 0:
-        raise argparse.ArgumentTypeError("timeout должен быть конечным положительным числом")
+        raise argparse.ArgumentTypeError("timeout must be a finite positive number")
     return number
 
 
@@ -252,39 +252,39 @@ def analyse(check, stdout, stderr, code, timed_out, fixture, token, control_ok):
     error = "\n".join(errors + [stderr])
     expected = {"control": {"list_dir"}, "tools": {"grep", "read_file"}, "max": set()}[check]
     if BLOCKED.search(error):
-        return "ERROR", "Запуск заблокирован или Grok не поддерживает безопасные флаги.", True
+        return "ERROR", "Execution blocked or safe CLI flags unsupported by Grok.", True
     if timed_out:
-        return "ERROR", "Превышен таймаут; тестовые процессы остановлены.", False
+        return "ERROR", "Timeout exceeded; test processes stopped.", False
     if init is None:
         http = re.search(r"(?:HTTP|status|http_status)[^\d]{0,25}(\d{3})\b", error, re.I)
         context = f"exit={code}"
         if http:
             context += f", HTTP {http.group(1)}"
-        return "ERROR", f"Grok не прислал событие init ({context}); проверка остановлена.", True
+        return "ERROR", f"Grok did not emit an init event ({context}); check stopped.", True
     observed = init.get("tools", [])
-    expected_text = ", ".join(sorted(expected)) or "пустой набор"
+    expected_text = ", ".join(sorted(expected)) or "empty set"
     if not isinstance(observed, list) or any(not isinstance(name, str) for name in observed):
-        return "ERROR", f"Несовместимый формат init.tools; ожидались: {expected_text}.", True
+        return "ERROR", f"Unsupported init.tools format; expected: {expected_text}.", True
     if set(observed) != expected:
         extra = sorted(set(observed) - expected)
         missing = sorted(expected - set(observed))
-        detail = f"Изоляция инструментов не сработала: лишних {len(extra)}, отсутствуют {missing or 'нет'}."
-        return "ERROR", detail + " Проверка остановлена; совместимость модели не определена.", True
+        detail = f"Tool isolation failed: extra {len(extra)}, missing {missing or 'none'}."
+        return "ERROR", detail + " Check stopped; model compatibility is unknown.", True
     for status in (401, 403, 429):
         if re.search(rf"(?:HTTP|status|http_status)[^\d]{{0,25}}{status}\b", error, re.I):
-            return "ERROR", f"HTTP {status}: проверьте ключ, доступ и квоту.", False
+            return "ERROR", f"HTTP {status}: check the API key, access, and quota.", False
     if re.search(r"(?:HTTP|status|http_status)[^\d]{0,25}400\b", error, re.I):
         if check == "max" and control_ok:
-            return "BUG", "HTTP 400 при глобальном max; контрольный high работает.", False
-        return "ERROR", "HTTP 400; контроль не позволяет подтвердить ошибку max.", False
+            return "BUG", "HTTP 400 with global max; the high control request works.", False
+        return "ERROR", "HTTP 400; the control request is inconclusive for the max issue.", False
     if check == "tools":
         raw = "\n".join(texts)
         truncated = any("EOF while parsing" in item or "invalid JSON" in item for item in errors)
         raw_grep = "<tool_call>" in raw and "function=grep" in raw and token in raw
         if truncated or raw_grep:
-            return "BUG", "Аргументы инструмента повреждены или вызов grep пришёл сырым XML.", False
+            return "BUG", "Tool arguments are malformed or the grep call arrived as raw XML.", False
     if code != 0 or terminal is None or terminal.get("is_error", False):
-        return "ERROR", "Grok завершился с ошибкой; результат проверки неопределён.", False
+        return "ERROR", "Grok exited with an error; the check is inconclusive.", False
 
     def succeeded(name, arguments, contains):
         for ident, call in calls.items():
@@ -304,25 +304,25 @@ def analyse(check, stdout, stderr, code, timed_out, fixture, token, control_ok):
               and succeeded("read_file", {"target_file": str(fixture)}, token))
     else:
         ok = not calls and bool(terminal.get("result") or "".join(texts).strip())
-    return ("OK", "Проверка пройдена.", False) if ok else (
-        "ERROR", "Успешный ответ нужных инструментов или модели отсутствует.", False,
+    return ("OK", "Check passed.", False) if ok else (
+        "ERROR", "A successful response from the required tools or model is missing.", False,
     )
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Быстрая перепроверка MiMo в Grok: инструменты при high и глобальный max.",
-        epilog="Коды выхода: 0 — всё OK; 1 — ошибка BUG воспроизведена; 2 — проверка ERROR/неопределённа. "
-               "Запросы расходуют квоту MiMo. Настройки и разрешения сохраняются.",
+        description="Quick MiMo/Grok compatibility check: tools at high and global max.",
+        epilog="Exit codes: 0 = all OK; 1 = BUG reproduced; 2 = ERROR/inconclusive. "
+               "Requests consume MiMo quota. Settings and permissions are preserved.",
     )
     parser.add_argument("--model", action="append",
                         choices=[*MODELS, *MODELS.values(), *ADAPTED_MODELS.values()],
-                        help="flash / pro или полный slug; по умолчанию обе исходные модели")
+                        help="flash / pro or full slug; defaults to both original models")
     parser.add_argument("--adapted", action="store_true",
-                        help="проверить альтернативные модели через локальный адаптер")
+                        help="check alternative models through the local adapter")
     parser.add_argument("--timeout", type=positive_timeout, default=60,
-                        help="таймаут одного запуска в секундах (по умолчанию 60)")
-    parser.add_argument("--json", action="store_true", help="вывести один JSON-отчёт")
+                        help="timeout per invocation in seconds (default: 60)")
+    parser.add_argument("--json", action="store_true", help="print a single JSON report")
     args = parser.parse_args()
     selected = ADAPTED_MODELS if args.adapted else MODELS
     translated = {**selected, **{MODELS[key]: selected[key] for key in MODELS}}
@@ -346,8 +346,8 @@ def main():
         report["version"] = version.stdout.strip().splitlines()[0]
         if not args.json:
             print(report["version"], flush=True)
-            print("Режим: " + ("локальный адаптер." if route == "adapter" else "прямой сервер Xiaomi."), flush=True)
-            print("Проверки: list_dir/high, grep+read_file/high, запрос с глобальным max.", flush=True)
+            print("Route: " + ("local adapter." if route == "adapter" else "direct Xiaomi server."), flush=True)
+            print("Checks: list_dir/high, grep+read_file/high, and a global max request.", flush=True)
         with tempfile.TemporaryDirectory(prefix="mimo-grok-check-") as temporary:
             root = Path(temporary)
             marker = str(root)
@@ -404,7 +404,7 @@ def main():
                         if check == "control":
                             control_ok = status == "OK"
                         if not args.json:
-                            print(f"{model:28} {check:7} {status:5} {seconds:5.1f}с  {detail}", flush=True)
+                            print(f"{model:28} {check:7} {status:5} {seconds:5.1f}s  {detail}", flush=True)
                         if stop:
                             break
                     if stop:
@@ -413,10 +413,10 @@ def main():
                 cleanup_processes(marker)
     except KeyboardInterrupt:
         interrupted = True
-        report["error"] = "Проверка прервана; временные процессы и файлы очищены."
+        report["error"] = "Check interrupted; temporary processes and files cleaned up."
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         # CLI/model logs can contain credentials; report controlled messages only.
-        report["error"] = f"Ошибка подготовки или запуска ({type(exc).__name__}); проверьте Grok и config.toml."
+        report["error"] = f"Setup or execution error ({type(exc).__name__}); check Grok and config.toml."
     finally:
         if before is not None:
             try:
@@ -424,18 +424,18 @@ def main():
             except OSError:
                 report["config_unchanged"] = False
         if not report["config_unchanged"]:
-            report["error"] = "Исходный config.toml изменился во время проверки; автоматическое восстановление отключено."
+            report["error"] = "The source config.toml changed during the check; automatic restoration is disabled."
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:
         if report.get("error"):
             print(report["error"])
         if report["config_unchanged"]:
-            print("Исходный конфиг сохранён.")
+            print("Source configuration preserved.")
             if not report.get("error"):
-                print("Временные сессии очищены.")
+                print("Temporary sessions cleaned up.")
         else:
-            print("Проверьте исходный конфиг.")
+            print("Inspect the source configuration.")
     if interrupted:
         return 130
     if report.get("error") or any(row["status"] == "ERROR" for row in report["results"]):
