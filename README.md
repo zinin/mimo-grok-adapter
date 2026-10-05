@@ -1,6 +1,8 @@
 # MiMo Grok Adapter
 
-A local adapter for **MiMo-V2.6-Flash** and **MiMo-V2.6-Pro** in **Grok Build**.
+A local adapter for **MiMo-V2.6-Flash**, **MiMo-V2.6-Pro**, and
+**MiMo-V2.6-Pro-UltraSpeed** in **Grok Build**. UltraSpeed uses the ordinary
+pay-as-you-go API route.
 It works around a confirmed nullable-type incompatibility in both Xiaomi MiMo
 Token Plan and the ordinary pay-as-you-go API. The incompatibility can produce
 truncated JSON arguments or raw XML tool calls when using `grep` and `read_file`.
@@ -52,8 +54,10 @@ are forwarded as they arrive.
 - Explicit `null` loses its schema allowance after normalization.
 - Unions with multiple non-null types, such as `["string", "integer", "null"]`,
   remain unchanged. `anyOf`/`oneOf` constructs are preserved.
-- The adapter supports POST `/v1/responses` and `/api/v1/responses` for the two
-  models listed above. Both routes apply the same schema normalization.
+- POST `/v1/responses` accepts Flash and Pro for Singapore Token Plan.
+  POST `/api/v1/responses` accepts Flash, Pro, and Pro-UltraSpeed for the ordinary
+  API. UltraSpeed is rejected on the Token Plan route. Both routes apply the
+  same schema normalization.
 - The request path selects one of the two fixed upstreams in the table above.
   Client-supplied upstream URLs and unknown paths are rejected.
 - The workaround addresses a specific schema incompatibility. Compatibility
@@ -215,10 +219,21 @@ grok -m mimo-v2.6-flash-api-adapted --effort high
 grok -m mimo-v2.6-pro-api-adapted --effort high
 ```
 
+Start Pro-UltraSpeed through the ordinary API adapter route:
+
+```bash
+grok -m mimo-v2.6-pro-ultraspeed --effort high
+```
+
+This short alias always uses `http://127.0.0.1:8320/api/v1`, the Responses
+backend, and `MIMO_PAYG_API_KEY`. The compatibility checker currently selects
+Flash and Pro; its `--model` choices do not include UltraSpeed.
+
 The example also includes direct entries: `mimo-v2.6-flash` / `mimo-v2.6-pro`
 for Token Plan and `mimo-v2.6-flash-api` / `mimo-v2.6-pro-api` for the ordinary
 API. Keep them to check upstream compatibility with the original schemas.
-All entries send the original model IDs, `mimo-v2.6-flash` and `mimo-v2.6-pro`.
+All entries send their original model IDs: `mimo-v2.6-flash`, `mimo-v2.6-pro`,
+or `mimo-v2.6-pro-ultraspeed`.
 The `-api-adapted` suffix selects the local API route, while `-adapted` selects
 the local Token Plan route.
 

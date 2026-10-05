@@ -24,6 +24,7 @@ import urllib.request
 UPSTREAM = "https://token-plan-sgp.xiaomimimo.com/v1"
 API_UPSTREAM = "https://api.xiaomimimo.com/v1"
 MODELS = {"mimo-v2.6-flash", "mimo-v2.6-pro"}
+API_MODELS = MODELS | {"mimo-v2.6-pro-ultraspeed"}
 MAX_BODY = 32 * 1024 * 1024
 HOP_HEADERS = {
     "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
@@ -163,7 +164,8 @@ class RelayHandler(BaseHTTPRequestHandler):
             if not isinstance(body, dict):
                 self.reply(400, "JSON object required")
                 return
-            if body.get("model") not in MODELS:
+            supported_models = API_MODELS if route == "api" else MODELS
+            if body.get("model") not in supported_models:
                 self.reply(400, "unsupported model")
                 return
             changed = normalize_tools(body)

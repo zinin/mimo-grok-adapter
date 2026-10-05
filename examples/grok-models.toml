@@ -43,6 +43,17 @@ context_window = 1048576
 max_request_bytes = 33554432
 reasoning_effort = "high"
 
+# UltraSpeed uses the ordinary API through the adapter with a short local alias.
+[model."mimo-v2.6-pro-ultraspeed"]
+model = "mimo-v2.6-pro-ultraspeed"
+name = "MiMo-V2.6-Pro-UltraSpeed [pay-as-you-go API adapter]"
+base_url = "http://127.0.0.1:8320/api/v1"
+api_backend = "responses"
+env_key = "MIMO_PAYG_API_KEY"
+context_window = 1048576
+max_request_bytes = 33554432
+reasoning_effort = "high"
+
 # Direct entries preserve the original schemas for upstream compatibility checks.
 [model."mimo-v2.6-flash"]
 model = "mimo-v2.6-flash"

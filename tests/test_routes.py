@@ -78,6 +78,57 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(api_calls, [('/v1/responses', 'Bearer fake-api', expected),
                                      ('/v1/responses', 'Bearer fake-api-2', expected)])
 
+    def test_ultraspeed_api_forwards_model_and_normalizes_tools(self):
+        plan_calls, api_calls = [], []
+        wire = b'event: response.completed\ndata: {"type":"response.completed"}\n\n'
+        plan = self.upstream(plan_calls, b'plan fixture')
+        api = self.upstream(api_calls, wire)
+        proxy = self.start_server(self.adapter.make_server('127.0.0.1', 0, plan, 2, api_upstream=api))
+        body = {'model': 'mimo-v2.6-pro-ultraspeed', 'input': 'fixture', 'stream': True,
+                'reasoning': {'effort': 'max'}, 'tools': [{'type': 'function', 'name': 'grep',
+                'parameters': {'type': 'object', 'required': ['pattern'], 'properties': {
+                    'pattern': {'type': 'string'}, 'path': {'type': ['string', 'null']}}}}]}
+        request = urllib.request.Request(proxy + '/api/v1/responses', data=json.dumps(body).encode(),
+                                         headers={'Authorization': 'Bearer fake-ultraspeed-api'})
+        try:
+            response = self.opener.open(request, timeout=3)
+        except urllib.error.HTTPError as error:
+            response = error
+        with response:
+            self.assertEqual(response.status, 200, 'Ultraspeed must be accepted on the API route')
+            self.assertEqual(response.read(), wire)
+        expected = copy.deepcopy(body)
+        expected['tools'][0]['parameters']['properties']['path']['type'] = 'string'
+        self.assertEqual(api_calls, [('/v1/responses', 'Bearer fake-ultraspeed-api', expected)])
+        self.assertEqual(plan_calls, [])
+
+    def test_ultraspeed_is_rejected_on_token_plan_route(self):
+        calls = []
+        upstream = self.upstream(calls, b'fixture')
+        proxy = self.start_server(self.adapter.make_server('127.0.0.1', 0, upstream, 2,
+                                                          api_upstream=upstream))
+        request = urllib.request.Request(proxy + '/v1/responses',
+                                         data=b'{"model":"mimo-v2.6-pro-ultraspeed"}',
+                                         headers={'Authorization': 'Bearer fake-plan'})
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.opener.open(request, timeout=3)
+        with caught.exception as response:
+            self.assertEqual(response.code, 400)
+        self.assertEqual(calls, [])
+
+    def test_unknown_api_model_is_rejected_before_upstream(self):
+        calls = []
+        upstream = self.upstream(calls, b'fixture')
+        proxy = self.start_server(self.adapter.make_server('127.0.0.1', 0, upstream, 2,
+                                                          api_upstream=upstream))
+        request = urllib.request.Request(proxy + '/api/v1/responses', data=b'{"model":"other"}',
+                                         headers={'Authorization': 'Bearer fake-api'})
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.opener.open(request, timeout=3)
+        with caught.exception as response:
+            self.assertEqual(response.code, 400)
+        self.assertEqual(calls, [])
+
     def test_api_errors_preserve_status_and_body(self):
         calls = []
         wire = b'{"error":{"message":"fixture rate limit"}}'
